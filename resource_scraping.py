@@ -73,8 +73,12 @@ if __name__ == '__main__':
 		print("Session is created!")
 	except SessionNotCreatedException as snce:
 		print("Session not Created!")
-
+	
 	for item in links:
 		url, brand = item
 		url, url_redirected, output_folder = screenshot_crawler.main(url, driver, output_dir)
-		save_webpage(url_redirected, output_folder, **kwargs)
+		if url_redirected is not None and output_folder is not None:
+			try:
+				save_webpage(url_redirected, output_folder, **kwargs)
+			except Exception:
+				continue
