@@ -1,0 +1,3 @@
+selenium
+pywebcopy
+tinycss2
