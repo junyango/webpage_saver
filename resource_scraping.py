@@ -54,6 +54,9 @@ if __name__ == '__main__':
 	args = parser.parse_args()
 
 	output_dir = main_config.output
+
+	# Initializing pywebcopy settings
+	kwargs = {'bypass_robots': True, 'zip_project_folder': False, 'join_timeout':5}
 		
 	# Getting list of URLs to crawl
 	file_to_crawl = args.file
@@ -73,10 +76,5 @@ if __name__ == '__main__':
 
 	for item in links:
 		url, brand = item
-		screenshot_crawler.main(url, driver, output_dir)
-
-
-
-	
-
-
+		url, url_redirected, output_folder = screenshot_crawler.main(url, driver, output_dir)
+		save_webpage(url_redirected, output_folder, **kwargs)
