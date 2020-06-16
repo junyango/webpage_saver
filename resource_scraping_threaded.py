@@ -1,6 +1,8 @@
 from warnings import simplefilter 
 simplefilter(action='ignore', category=FutureWarning)
 
+from multiprocessing import Process, Queue
+
 # Multi-threading packages
 from threading import Thread
 import threading
@@ -30,12 +32,12 @@ def initialize_list(path):
 	with open(path, "r") as f:
 		content = f.readlines()
 		for line in content:
-			url = line.split("\t")[0].strip()
-			ground_truth = line.split("\t")[1].strip()
-			item_list.append((url, ground_truth))
+			file_name = line.split("\t")[0].strip()
+			url = line.split("\t")[1].strip()
+			ground_truth = line.split("\t")[2].strip()
+			item_list.append((file_name, url, ground_truth))
 
 	return item_list
-
 
 # --start-maximized may not work so well because headless does not recognize resolution size
 # therefore, windowsize has to be explicitly specified
@@ -84,17 +86,17 @@ class Worker(Thread):
 			# Get the work from the queue and expand the tuple
 			item = self.queue.get()
 			try:
-				link, brand = item
+				file_name, url, brand = item
+				print("Testing: " + url + " now!")
+				output_path = os.path.join(self.output_dir, file_name)
 				# Extracts screenshot, html.txt and url.txt into an output folder
 				#  Output: html.txt, coordinates.txt, shot.png, info.txt that stores URL
 				# Coordinates are extracted via HTML and CSS heuristics
-				url, url_redirected, output_folder = screenshot_crawler.main(link, self.driver, self.output_dir)
+				url, url_redirected, output_folder = screenshot_crawler.main(link, self.driver, output_path)
 				# Pipeline output from screenshot crawler (url, and output_folder) to save_webpage to save entire webpage locally 
 				if url_redirected is not None and output_folder is not None:
 					try:
-						lock.acquire()
 						save_webpage(url_redirected, output_folder, **self.kwargs)
-						lock.release()
 					except Exception:
 						pass
 			except Exception:

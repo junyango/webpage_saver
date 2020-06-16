@@ -24,9 +24,10 @@ def initialize_list(path):
 	with open(path, "r") as f:
 		content = f.readlines()
 		for line in content:
-			url = line.split("\t")[0].strip()
-			ground_truth = line.split("\t")[1].strip()
-			item_list.append((url, ground_truth))
+			file_name = line.split("\t")[0].strip()
+			url = line.split("\t")[1].strip()
+			ground_truth = line.split("\t")[2].strip()
+			item_list.append((file_name, url, ground_truth))
 
 	return item_list
 
@@ -73,12 +74,14 @@ if __name__ == '__main__':
 		print("Session is created!")
 	except SessionNotCreatedException as snce:
 		print("Session not Created!")
-	
+
 	for item in links:
-		url, brand = item
-		url, url_redirected, output_folder = screenshot_crawler.main(url, driver, output_dir)
-		if url_redirected is not None and output_folder is not None:
-			try:
+		file_name, url, brand = item
+		output_path = os.path.join(output_dir, file_name)
+		print("Testing: " + file_name + " " + url + " now!")
+		try:
+			url, url_redirected, output_folder = screenshot_crawler.main(url, driver, output_path)
+			if url_redirected is not None and output_folder is not None:
 				save_webpage(url_redirected, output_folder, **kwargs)
-			except Exception:
-				continue
+		except Exception:
+			continue

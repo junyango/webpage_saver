@@ -166,7 +166,7 @@ def check_abs_rel(url, path):
 # MAIN CODE #
 ############################################################################################
 
-def main(url, driver, output):
+def main(url, driver, output_folder):
 	############################################################################################
 	# Screenshot portion #
 	############################################################################################
@@ -189,11 +189,9 @@ def main(url, driver, output):
 		return (None, None, None)
 	else:
 		# Instantiating folder paths to save documents to
-		domain = clean_domain(urlparse(url_to_check).netloc, '\/:*?"<>|')
-		timepu = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime(time.time()))
-		path = domain + "_" + timepu
-		output_folder = os.path.join(output, path)
-		print(output_folder)
+
+		# domain = clean_domain(urlparse(url_to_check).netloc, '\/:*?"<>|')
+		# timepu = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime(time.time()))
 		if not os.path.exists(output_folder):
 			os.makedirs(output_folder)
 
