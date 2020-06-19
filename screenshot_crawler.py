@@ -441,17 +441,20 @@ def main(url, driver, output_folder):
 				if img and path:
 					type = path[0][0]
 					token = path[0][1].value
-					if type == "class":
-						element = driver.find_elements_by_class_name(token)
-					elif type =="id":
-						element = driver.find_elements_by_id(token)
-					else:
-						element = driver.find_elements_by_tag_name(token)
+					try:
+						if type == "class":
+							element = driver.find_elements_by_class_name(token)
+						elif type =="id":
+							element = driver.find_elements_by_id(token)
+						else:
+							element = driver.find_elements_by_tag_name(token)
 
-					if element:
-						for item in element:
-							potential_image_set.add(item)
-					else:
+						if element:
+							for item in element:
+								potential_image_set.add(item)
+						else:
+							continue
+					except Exception:
 						continue
 
 			############################################################################################
