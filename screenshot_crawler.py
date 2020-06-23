@@ -42,37 +42,38 @@ def initialize_img_extension():
 
 	return img_extensions
 
-def strip_directories(img_full_path, output_folder):
-	if img_full_path[0] == "/":
-		img_full_path = img_full_path[1:]
 
+# Method crafts into unique xpaths given a BS4 element
+# Credit: https://gist.github.com/ergoithz/6cf043e3fdedd1b94fcf
+def xpath_creator(element):
+    components = []
+    child = element if element.name else element.parent
+    for parent in child.parents:  # type: bs4.element.Tag
+        siblings = parent.find_all(child.name, recursive=False)
+        if len(siblings) == 1:
+            if "svg" not in child.name:
+                    components.append(child.name)
+            else:
+                # Need to handle if SVG is here
+                components.append("*")
 
-	directories = "/".join(img_full_path.split("/")[:-1])
-	file_name = img_full_path.split("/")[-1]
-	local_directory = os.path.join(output_folder, directories)
-	# Creating local directory to store HTML rendered images
-	if not os.path.exists(local_directory):
-		os.makedirs(local_directory)
+        else:
+            if "svg" not in child.name:
+                components.append('%s[%d]' % (child.name, next(i for i, s in enumerate(siblings, 1) if s is child)))
+            else:
+                components.append("*")
+        child = parent
+    components.reverse()
 
-	return file_name, local_directory
+    xpath = ""
+    for item in components:
+        if "*" not in item:
+            xpath = xpath + "/" + item
+        else:
+            xpath = xpath + "/" + item
+            break
 
-
-def resolve_url(url1, url2):
-	if url1[-1] != "/" and url2[-1] != "/":
-		url = url1 + "/" + url2
-
-	split = url.split("/")
-	new_url = []
-	for index, item in enumerate(split):
-		if split[index] == "..":
-			new_url.pop()
-			continue
-		elif split[index] == ".":
-			continue
-		else:
-			new_url.append(item)
-
-	return  "/".join(new_url)
+    return xpath
 
 
 def download_file(url, directory):
@@ -83,37 +84,23 @@ def download_file(url, directory):
 	except Exception:	
 		return None
 
+
 def write_file(path, contents):
 	with open(path, "w+", encoding='utf-8') as f:
 		f.write(contents)
 	f.close()
+
 
 # Function to recursively remove a particular path (folder)
 def remove_folder(path):
 	if len(os.listdir(path))==0:
 		rmtree(path)
 
+
 # Initialize list of known benign websites
 def initialize_alexa(path):
 	return list(filter(None, set(open(path,'r', encoding = "utf-8").read().lower().split('\n'))))
 
-# Sanitizing domain to remove unwanted characters that are cannot be used to create file path
-def clean_domain(domain, deletechars):
-	for c in deletechars:
-		domain = domain.replace(c,'')
-	return domain
-
-
-def sanitize_url(url):
-    if "http://" in url:
-        url = url.replace("http://","")
-    elif "https://" in url:
-        url = url.replace("https://","")
-
-    if "www." in url:
-        url = url.replace("www.","")
-
-    return url
 
 # Add more rules to check for redirect?
 def check_redirect(url):
@@ -147,25 +134,260 @@ def check_redirect(url):
 		print("[*] Website might be dead!")
 		return None
 
-# Check absolute or relative URL 
-def check_abs_rel(url, path):
-	# Check if its relative URL or absolute URL
-	if urlparse(path).netloc:
-		# Absolute URL
-		full_url = url
-		absolute_path = urlparse(path).path
-	else:
-		# Relative URL
-		full_url = os.path.join(url, path).replace("\\", "/")
-		absolute_path = path
 
-	return full_url, absolute_path
+# HTML Heuristics parsing
+def html_heuristics(driver, timing_path):
+	start_time = time.time()
+
+	# Data structures and path initialization
+	potential_image_set = set()
+	coordinates_path = os.path.join(output_folder, "html_coords.txt")
+	############################################################################################
+	# HTML PARSING OCCURS HERE #
+	############################################################################################
+	start_time = time.time()
+	############################################################################################
+	# DATA IS ONLY SCRAPPED FROM HTML SOURCES #
+	############################################################################################
+	# Extracting tag "a"
+	try:
+		elems = driver.find_elements_by_tag_name("a")
+		for elem in elems:		
+			potential_image_set.add(elem)		
+	except Exception:
+		pass
+
+	# Extracting tag "img"
+	print("Extracting from HTML elements...")
+	try:
+		elems = driver.find_elements_by_tag_name("img")
+		for elem in elems:
+			potential_image_set.add(elem)
+	except Exception:
+		pass
+
+	# Extracting tag "svg"
+	try:
+		elems = driver.find_elements_by_tag_name("svg")
+		for elem in elems:
+			potential_image_set.add(elem)
+	except Exception:
+		pass
+
+	# Extracting tag "link"
+	try:
+		elems = driver.find_elements_by_tag_name("link")
+		for elem in elems:
+			if "image" in elem['type']:
+				potential_image_set.add(elem)
+	except Exception:
+		pass
+
+	# Extracting CSS embedded in HTML file (not separated)
+	# Examples in HTML file: <body style = "background-image: url ....">"
+	try:
+		elems = driver.find_elements_by_xpath("//*")
+		for elem in elems:
+			if "none" not in elem.value_of_css_property("background-image"):
+				potential_image_set.add(elem)
+	except Exception:
+		pass
+
+	# First creating a dictionary to store data of css pages with links and class names
+	dictionary_images = {}
+	############################################################################################
+	# DATA IS SCRAPPED FROM CSS SOURCE
+	############################################################################################
+	print("Extracting from CSS elements...")
+	try:
+		elems = driver.find_elements_by_tag_name("link")
+		for elem in elems:
+			try:
+				link = elem.get_attribute('href')
+				if ".css" in link:
+					# Parsing the CSS data straight away to download images
+					with open(css_save_path, "r") as f:
+						data = f.read()
+
+					rules = tinycss2.parse_stylesheet(
+					    data
+					)
+
+					# IDENT TOKEN = "class name" --> Identification Token
+					# URL TOKEN = if a CSS element contains a URL (likely due to images)
+					# Parsing the rules to grab images (URL)
+					# STILL HAVE LOTS OF ROOM FOR IMPROVEMENT FOR HEURISTICS HERE 
+
+					for rule in rules:
+						try:
+							content = rule.content
+							if content:
+								for element in content:
+									# Extract URL and check if it is an image
+									# IF TRUE -> Extract the class names and store URL and classname to dictionary to map back to HTML 
+									# IF TRUE -> means an image element is found in CSS page
+									if element.type == "url" and test_link_extension(element.value):
+										############################################################################################
+										# PARSING TO EXTRACT ELEMENTS 
+										############################################################################################
+										class_object = rule.prelude
+										temporary_classlist = []
+										index = len(class_object)-1
+										
+										# Checking if it is a standalone one token
+										if len(class_object) == 1:
+											if class_object[index-1].type == "hash":
+												temporary_classlist.append(("id", class_object[index-1]))
+											elif class_object[index-1].value == ".":
+												temporary_classlist.append(("class", class_object[index-1]))
+
+										while (index >= 0):
+											if (class_object[index].type == "ident" and (class_object[index-1].type=="literal")):
+												# class separator
+												if(class_object[index-1].value == "."):
+													temporary_classlist.append(("class", class_object[index]))
+													break
+												elif(class_object[index-1].type == "hash"):
+													temporary_classlist.append(("id", class_object[index-1]))
+													break
+												else:
+													temporary_classlist.append(("tag", class_object[index]))
+													break
+											elif (class_object[index].type == "ident" and (class_object[index-1].type=="whitespace")):
+												# class separator
+												if(class_object[index-2].value == "."):
+													temporary_classlist.append(("class", class_object[index]))
+													break
+												elif(class_object[index-2].type == "hash"):
+													temporary_classlist.append(("id", class_object[index-2]))
+													break
+												else:
+													temporary_classlist.append(("tag", class_object[index]))
+													break
+								
+											index -=1
+
+										dictionary_images[element] = temporary_classlist
+									else:
+										continue
+						except AttributeError:
+							continue
+
+			except Exception:
+				continue
+	except Exception:
+		# print("Element in not attached to page document")
+		pass
+
+	# TO-DO 
+	# Improve the algorithm here
+	# Current implementation just uses last path, should use entire tree traversed
+	for img, path in dictionary_images.items():
+		if img and path:
+			type = path[0][0]
+			token = path[0][1].value
+			if type == "class":
+				element = driver.find_elements_by_class_name(token)
+			elif type =="id":
+				element = driver.find_elements_by_id(token)
+			else:
+				element = driver.find_elements_by_tag_name(token)
+
+			if element:
+				for item in element:
+					potential_image_set.add(item)
+			else:
+				continue
+
+	############################################################################################
+	# EXTRACTING COORDINATES FROM ALL SOURCES
+	# Write to file
+	############################################################################################			
+	# All the combined image elements
+	for item in potential_image_set:
+		try:
+			with open(coordinates_path, "a+") as f:
+				# The location is the coordinates of the top left hand corner
+				x1 = item.rect["x"]
+				y1 = item.rect["y"]
+				x2 = x1 + int(item.rect["width"])
+				y2 = y1 + int(item.rect["height"])
+				f.write(str((x1,y1,x2,y2)))
+				f.write("\n")
+		except TypeError:
+			continue
+		except Exception:
+			# Catches all other exceptions
+			continue
+
+	total_time = time.time() - start_time
+	with open(timing_path, "a+") as f:
+		f.write("HTML Ruled Based: " + str(total_time))
+		f.write("\n")
+
+
+def extract_all_coordinates(driver, content, output_folder):
+	############################################################################################
+	# Full extraction of all coordinates
+	############################################################################################
+	# Using descendants method (traverse all)
+	# Speed comparison to BFS is comparatively the same since need to traverse  through all nodes without giving up branches
+	# DFS requires less memory 
+	try:
+		soup = BeautifulSoup(content, "lxml")
+		body_portion = soup.find("body")
+	except Exception:
+		return 
+
+	# Initializing file paths to store data
+	all_coordinates_path = os.path.join(output_folder, "all_coordinates.txt")
+	all_coordinates = set()
+
+	if hasattr(body_portion, "descendants"):
+	    for kiddo in body_portion.descendants:
+	        try:
+	            xpath = xpath_creator(kiddo)
+	            element = driver.find_element_by_xpath(xpath)
+	        except:
+	            continue
+
+	        # If theres element, try to get the current location
+	        try:
+	            if element:       
+	                x1 = float(element.rect["x"])
+	                y1 = float(element.rect["y"])
+	                x2 = float(x1 + int(element.rect["width"]))
+	                y2 = float(y1 + int(element.rect["height"]))
+	                all_coordinates.add((x1, y1, x2, y2))
+	        except Exception:
+	            continue
+
+	with open(all_coordinates_path, "w+") as f:
+	    for item in all_coordinates:
+	        f.write(str(item)+"\n")
+
+# --start-maximized may not work so well because headless does not recognize resolution size
+# therefore, windowsize has to be explicitly specified
+def initialize_chrome_settings():
+	options = webdriver.ChromeOptions()
+	options.add_argument('--ignore-certificate-errors')
+	options.add_argument('--ignore-certificate-errors-spki-list')
+	options.add_argument('--ignore-ssl-errors')
+	options.add_argument("--start-maximized")
+	options.add_argument("--headless")
+	options.add_argument("--incognito")
+	options.add_argument('--disable-dev-shm-usage')
+	options.add_argument("--window-size=1920,1080")
+	options.add_argument("--enable-javascript")
+	options.add_argument("--disable-gpu")
+
+	return options
+			
 
 
 ############################################################################################
 # MAIN CODE #
 ############################################################################################
-
 def main(url, driver, output_folder):
 	############################################################################################
 	# Screenshot portion #
@@ -180,18 +402,13 @@ def main(url, driver, output_folder):
 	
 	if url_to_check is None:
 		return (None, None, None)
-	
-	domain = urlparse(url_to_check).netloc
 
 	# Only testing the URLs that are not in alexa_list (assumed to be secure)
-	if domain in alexa_list:
+	if urlparse(url_to_check).netloc in alexa_list:
 		print("In alexa list!")
 		return (None, None, None)
 	else:
 		# Instantiating folder paths to save documents to
-
-		# domain = clean_domain(urlparse(url_to_check).netloc, '\/:*?"<>|')
-		# timepu = time.strftime("%Y-%m-%d-%H-%M-%S", time.localtime(time.time()))
 		if not os.path.exists(output_folder):
 			os.makedirs(output_folder)
 
@@ -215,6 +432,7 @@ def main(url, driver, output_folder):
 			print("Error! Removing folder: " + output_folder)
 			remove_folder(output_folder)
 			return (None, None, None)
+
 		if status_code != 200:
 			return (None, None, None)
 
@@ -226,18 +444,6 @@ def main(url, driver, output_folder):
 				driver.get(url_to_check)
 				frame = driver.find_elements_by_xpath("//frame")
 				iframe = driver.find_elements_by_xpath("//iframe")
-			except TimeoutException as toe:
-				print("TimeoutException, removing folder: " + output_folder)
-				remove_folder(output_folder)
-				return (None, None, None)
-			except InvalidSessionIdException as isie:
-				print("InvalidSessionIdException, removing folder: " + output_folder)
-				remove_folder(output_folder)
-				return (None, None, None)
-			except MaxRetryError as mre:
-				print("MaxRetryError, removing folder: " + output_folder)
-				remove_folder(output_folder)
-				return (None, None, None)
 			except Exception:
 				remove_folder(output_folder)
 				return (None, None, None)
@@ -270,13 +476,11 @@ def main(url, driver, output_folder):
 			except Exception:
 				return (None, None, None)
 
-			# Extracting information that is required for SIFT
+			
 			# Screenshot, HTML code and URL
 			driver.save_screenshot(screenshot_path)
-			# print("--- %s seconds for SCREENSHOT ---" % (time.time() - start_time))
 			write_file(html_path, content)
 			write_file(info_path, url_to_check)
-
 
 			# Check if webpage is purely empty 
 			# Have a function here to check if webpage is really empty 
@@ -284,239 +488,27 @@ def main(url, driver, output_folder):
 			if "<div" not in content and req.text == "":
 				print("No point saving HTML as HTML is likely to be empty")
 				return (None, None, None)
-
-
-			############################################################################################
-			# Extract coordinates #
-			############################################################################################
-			# Declaring a set to uniquely identify and add all elements in a page
-
-			potential_image_set = set()
-			coordinates_path = os.path.join(output_folder, "html_coords.txt")
-
-
-			############################################################################################
-			# HTML PARSING OCCURS HERE #
-			############################################################################################
-			start_time = time.time()
-			# Extracting tag "a"
-			try:
-				elems = driver.find_elements_by_tag_name("a")
-				for elem in elems:		
-					potential_image_set.add(elem)
-						
-			except Exception:
-				# print("Element is not attached to page document")
-				pass
-
-			############################################################################################
-			# DATA IS ONLY SCRAPPED FROM HTML SOURCES #
-			############################################################################################
-			# Extracting tag "img"
-			print("Extracting from HTML elements...")
-			try:
-				elems = driver.find_elements_by_tag_name("img")
-				for elem in elems:
-					potential_image_set.add(elem)
-			except Exception:
-				pass
-
-			# Extracting tag "svg"
-			try:
-				elems = driver.find_elements_by_tag_name("svg")
-				for elem in elems:
-					potential_image_set.add(elem)
-			except Exception:
-				pass
-
-			# Extracting tag "link"
-			try:
-				elems = driver.find_elements_by_tag_name("link")
-				for elem in elems:
-					if "image" in elem['type']:
-						potential_image_set.add(elem)
-			except Exception:
-				pass
-
-			# Extracting CSS embedded in HTML file (not separated)
-			# Examples in HTML file: <body style = "background-image: url ....">"
-			try:
-				elems = driver.find_elements_by_xpath("//*")
-				for elem in elems:
-					if "none" not in elem.value_of_css_property("background-image"):
-						potential_image_set.add(elem)
-			except Exception:
-				pass
-
-			# First creating a dictionary to store data of css pages with links and class names
-			dictionary_images = {}
-			############################################################################################
-			# DATA IS SCRAPPED FROM CSS SOURCE
-			############################################################################################
-			print("Extracting from CSS elements...")
-			try:
-				elems = driver.find_elements_by_tag_name("link")
-				for elem in elems:
-					try:
-						link = elem.get_attribute('href')
-						if ".css" in link:
-							# Parsing the CSS data straight away to download images
-							with open(css_save_path, "r") as f:
-								data = f.read()
-
-							rules = tinycss2.parse_stylesheet(
-							    data
-							)
-
-							# IDENT TOKEN = "class name" --> Identification Token
-							# URL TOKEN = if a CSS element contains a URL (likely due to images)
-							# Parsing the rules to grab images (URL)
-							# STILL HAVE LOTS OF ROOM FOR IMPROVEMENT FOR HEURISTICS HERE 
-
-							for rule in rules:
-								try:
-									content = rule.content
-									if content:
-										for element in content:
-											# Extract URL and check if it is an image
-											# IF TRUE -> Extract the class names and store URL and classname to dictionary to map back to HTML 
-											# IF TRUE -> means an image element is found in CSS page
-											if element.type == "url" and test_link_extension(element.value):
-												############################################################################################
-												# PARSING TO EXTRACT ELEMENTS 
-												############################################################################################
-												class_object = rule.prelude
-												temporary_classlist = []
-												index = len(class_object)-1
-												
-												# Checking if it is a standalone one token
-												if len(class_object) == 1:
-													if class_object[index-1].type == "hash":
-														temporary_classlist.append(("id", class_object[index-1]))
-													elif class_object[index-1].value == ".":
-														temporary_classlist.append(("class", class_object[index-1]))
-
-												while (index >= 0):
-													if (class_object[index].type == "ident" and (class_object[index-1].type=="literal")):
-														# class separator
-														if(class_object[index-1].value == "."):
-															temporary_classlist.append(("class", class_object[index]))
-															break
-														elif(class_object[index-1].type == "hash"):
-															temporary_classlist.append(("id", class_object[index-1]))
-															break
-														else:
-															temporary_classlist.append(("tag", class_object[index]))
-															break
-													elif (class_object[index].type == "ident" and (class_object[index-1].type=="whitespace")):
-														# class separator
-														if(class_object[index-2].value == "."):
-															temporary_classlist.append(("class", class_object[index]))
-															break
-														elif(class_object[index-2].type == "hash"):
-															temporary_classlist.append(("id", class_object[index-2]))
-															break
-														else:
-															temporary_classlist.append(("tag", class_object[index]))
-															break
-										
-													index -=1
-
-												dictionary_images[element] = temporary_classlist
-											else:
-												continue
-								except AttributeError:
-									continue
-
-					except Exception:
-						continue
-			except Exception:
-				# print("Element in not attached to page document")
-				pass
-
-			# TO-DO 
-			# Improve the algorithm here
-			# Current implementation just uses last path, should use entire tree traversed
-			for img, path in dictionary_images.items():
-				if img and path:
-					type = path[0][0]
-					token = path[0][1].value
-					try:
-						if type == "class":
-							element = driver.find_elements_by_class_name(token)
-						elif type =="id":
-							element = driver.find_elements_by_id(token)
-						else:
-							element = driver.find_elements_by_tag_name(token)
-
-						if element:
-							for item in element:
-								potential_image_set.add(item)
-						else:
-							continue
-					except Exception:
-						continue
-
-			############################################################################################
-			# EXTRACTING COORDINATES FROM ALL SOURCES
-			############################################################################################			
-			# All the combined image elements
-			for item in potential_image_set:
-				try:
-					with open(coordinates_path, "a+") as f:
-						# The location is the coordinates of the top left hand corner
-						x1 = item.rect["x"]
-						y1 = item.rect["y"]
-						x2 = x1 + int(item.rect["width"])
-						y2 = y1 + int(item.rect["height"])
-						f.write(str((x1,y1,x2,y2)))
-						f.write("\n")
-				except TypeError:
-					continue
-				except Exception:
-					# Catches all other exceptions
-					continue
-
-	total_time = time.time() - start_time
-	with open(timing_path, "a+") as f:
-		f.write("HTML Ruled Based: " + str(total_time))
-		f.write("\n")
-
+		
+	extract_all_coordinates(driver, content, output_folder)
+	# html_heuristics(driver, timing_path)
 
 	return url, url_to_check, output_folder
 
-# --start-maximized may not work so well because headless does not recognize resolution size
-# therefore, windowsize has to be explicitly specified
-def initialize_chrome_settings():
-	options = webdriver.ChromeOptions()
-	options.add_argument('--ignore-certificate-errors')
-	options.add_argument('--ignore-certificate-errors-spki-list')
-	options.add_argument('--ignore-ssl-errors')
-	options.add_argument("--start-maximized")
-	options.add_argument("--headless")
-	options.add_argument("--incognito")
-	options.add_argument('--disable-dev-shm-usage')
-	options.add_argument("--window-size=1920,1080")
-	options.add_argument("--enable-javascript")
-	options.add_argument("--disable-gpu")
 
-	return options
-			
+# # Only uncomment this for individual script testing!
+# if __name__ == "__main__":
+# 	# Initializing chrome driver settings to run headless, windows resolution etc.
+# 	chrome_driver_options = initialize_chrome_settings()
+# 	chromedriver = main_config.chromedriver
+# 	try:
+# 		print("Starting driver!")
+# 		driver = webdriver.Chrome(chromedriver, options=chrome_driver_options)
+# 		driver.set_page_load_timeout(30)
+# 		driver.set_script_timeout(30)
+# 		print("Session is created!")
+# 	except SessionNotCreatedException as snce:
+# 		print("Session not Created!")
 
-# Only uncomment this for individual script testing!
-if __name__ == "__main__":
-	# Initializing chrome driver settings to run headless, windows resolution etc.
-	chrome_driver_options = initialize_chrome_settings()
-	chromedriver = main_config.chromedriver
-	try:
-		print("Starting driver!")
-		driver = webdriver.Chrome(chromedriver, options=chrome_driver_options)
-		driver.set_page_load_timeout(30)
-		driver.set_script_timeout(30)
-		print("Session is created!")
-	except SessionNotCreatedException as snce:
-		print("Session not Created!")
+# 	url = "http://www.comercialmattos.com.br/login.html"
 
-	url = "http://www.comercialmattos.com.br/login.html"
-
-	main(url, driver, "test")
+# 	main(url, driver, "test")
